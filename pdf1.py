@@ -1,4 +1,3 @@
-import pdfplumber
 
 def extract_data_from_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
