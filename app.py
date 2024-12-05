@@ -7,23 +7,24 @@ import io
 import shutil
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, Image
 from reportlab.lib import colors
 import zipfile
+
 
 
 
 app = Flask(__name__)
 
 # Folders for uploads and static files
-UPLOAD_FOLDER = 'upload'
+UPLOAD_FOLDER = os.path.join("static", "extracted_pdfs")
 STATIC_FOLDER = os.path.join('static', 'images')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(STATIC_FOLDER, exist_ok=True)
 
+app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['STATIC_FOLDER'] = STATIC_FOLDER
-
 
 def extract_name_and_dob(pdf_path):
     try:
@@ -331,7 +332,7 @@ def extract_data_from_page_9(pdf_path):
 
 def add_table_to_pdf(pdf, data_frame, title, y_position):
     """
-    Adds a table to the PDF.
+    Adds a table to the PDF without column titles.
     :param pdf: The ReportLab canvas
     :param data_frame: Pandas DataFrame to render as a table
     :param title: Title of the section
@@ -347,18 +348,16 @@ def add_table_to_pdf(pdf, data_frame, title, y_position):
     pdf.drawString(100, y_position, title)
     y_position -= 20
 
-    # Convert DataFrame to list of lists for ReportLab
-    table_data = [data_frame.columns.tolist()] + data_frame.values.tolist()
+    # Convert DataFrame to list of lists for ReportLab, excluding column titles
+    table_data = data_frame.values.tolist()
 
     # Create the table
     table = Table(table_data)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.beige),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
     ]))
 
@@ -375,6 +374,57 @@ def add_table_to_pdf(pdf, data_frame, title, y_position):
 
     return y_position
 
+def add_table_with_image_to_pdf(pdf, data_frame, title, y_position, image_path=None):
+    """
+    Adds an image to the PDF first, followed by a table if provided.
+    :param pdf: The ReportLab canvas
+    :param data_frame: Pandas DataFrame to render as a table
+    :param title: Title of the section
+    :param y_position: Current Y-position on the PDF
+    :param image_path: Path to the image to insert
+    :return: Updated Y-position after rendering the image and table
+    """
+    if y_position < 200:  # Start a new page if not enough space for the image
+        pdf.showPage()
+        pdf.setFont("Helvetica", 12)
+        y_position = 750
+
+    # Add the title
+    pdf.drawString(100, y_position, title)
+    y_position -= 20
+
+    # Add the image first, if provided
+    if image_path:
+        pdf.drawImage(image_path, 100, y_position - 150, width=200, height=150)
+        y_position -= 170
+
+    # Add the table
+    if data_frame is not None:
+        # Convert DataFrame to list of lists for ReportLab
+        table_data = data_frame.values.tolist()
+
+        # Create the table
+        table = Table(table_data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.beige),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+
+        # Calculate table height
+        table_width, table_height = table.wrap(500, y_position)
+        if y_position - table_height < 50:  # Start a new page if the table doesn't fit
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y_position = 750
+
+        # Draw the table
+        table.drawOn(pdf, 100, y_position - table_height)
+        y_position -= table_height + 20
+
+    return y_position
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -383,242 +433,172 @@ def index():
         if 'pdf_files' not in request.files:
             return "No files part"
 
-        files = request.files.getlist('pdf_files')  # Get the list of uploaded files
-
+        files = request.files.getlist('pdf_files')
         if not files or all(file.filename == '' for file in files):
             return "No files selected"
 
-        extracted_results = []  # Store results for each uploaded PDF
-        uploaded_files = []  # Store uploaded file information
+        extracted_pdfs = []  # Store paths for extracted PDFs
 
         for file in files:
             if not file.filename.lower().endswith('.pdf'):
                 return f"{file.filename} is not a valid PDF"
 
-            # Save the file
+            # Save uploaded file
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(file_path)
 
-            # Store uploaded file information for download buttons
-            uploaded_files.append({'filename': file.filename, 'file_path': file_path})
+            # Generate extracted PDF
+            output_filename = file.filename.replace('.pdf', '_extracted.pdf')
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+            generate_extracted_pdf(file_path, output_path)
 
-            # Extract data and images for each file
-            extracted_data = extract_name_and_dob(file_path)
-            images = extract_images(file_path)
-            page_4_data = extract_data_from_page_4(file_path)
-            page_5_table_1, page_5_table_2 = extract_data_from_page_5(file_path)
-            page_6_data = extract_data_from_page_6(file_path)
-            page_7_table_1, page_7_table_2 = extract_data_from_page_7(file_path)
-            page_8_table_1, page_8_table_2 = extract_data_from_page_8(file_path)
-            page_9_data = extract_data_from_page_9(file_path)
-
-            # Append extracted data for this file
-            extracted_results.append({
+            # Add the static path for rendering in HTML
+            extracted_pdfs.append({
                 'filename': file.filename,
-                'extracted_data': extracted_data,
-                'images': images,
-                'page_4_data': page_4_data.to_html(classes="table table-striped", index=False) if not page_4_data.empty else None,
-                'page_5_table_1': page_5_table_1.to_html(classes="table table-striped", index=False) if not page_5_table_1.empty else None,
-                'page_5_table_2': page_5_table_2.to_html(classes="table table-striped", index=False) if not page_5_table_2.empty else None,
-                'page_6_data': page_6_data.to_html(classes="table table-striped", index=False) if not page_6_data.empty else None,
-                'page_7_table_1': page_7_table_1.to_html(classes="table table-striped", index=False) if not page_7_table_1.empty else None,
-                'page_7_table_2': page_7_table_2.to_html(classes="table table-striped", index=False) if not page_7_table_2.empty else None,
-                'page_8_table_1': page_8_table_1.to_html(classes="table table-striped", index=False) if not page_8_table_1.empty else None,
-                'page_8_table_2': page_8_table_2.to_html(classes="table table-striped", index=False) if not page_8_table_2.empty else None,
-                'page_9_data': page_9_data.to_html(classes="table table-striped", index=False) if not page_9_data.empty else None,
-                'imagefrompage5': images.get("imagefrompage5"),
-                'imagefrompage6': images.get("imagefrompage6"),
-                'imagefrompage9': images.get("imagefrompage9"),
+                'pdf_path': f"/static/extracted_pdfs/{output_filename}"
             })
 
-        # Pass both uploaded files and extracted results to the template
-        return render_template('index.html', uploaded_files=uploaded_files, results=extracted_results)
+        return render_template('index.html', extracted_pdfs=extracted_pdfs)
 
-    # Render empty template for GET request
-    return render_template('index.html', uploaded_files=[], results=[])
+    return render_template('index.html', extracted_pdfs=[])
 
 
-@app.route('/download_pdf', methods=['POST'])
-def download_pdf():
-    file_paths = request.form.getlist("file_paths")  # Get all file paths from the form
-    if not file_paths:
-        return "No files selected for download"
-
-    # Create a temporary ZIP file in memory
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for file_path in file_paths:
-            # Extract data for each PDF
-            extracted_data = extract_name_and_dob(file_path)
-            images = extract_images(file_path)
-            page_4_data = extract_data_from_page_4(file_path)
-            page_5_table_1, page_5_table_2 = extract_data_from_page_5(file_path)
-            page_6_data = extract_data_from_page_6(file_path)
-            page_7_table_1, page_7_table_2 = extract_data_from_page_7(file_path)
-            page_8_table_1, page_8_table_2 = extract_data_from_page_8(file_path)
-            page_9_data = extract_data_from_page_9(file_path)
-
-            # Access individual images
-            imagefrompage5 = images.get("imagefrompage5")
-            imagefrompage6 = images.get("imagefrompage6")
-            imagefrompage9 = images.get("imagefrompage9")
-
-            # Create a new PDF for this file
-            pdf_buffer = io.BytesIO()
-            pdf = canvas.Canvas(pdf_buffer, pagesize=letter)
-            pdf.setFont("Helvetica", 12)
-
-            # Add extracted data to the PDF
-            pdf.drawString(100, 750, "Your Brain Health EEG Report")
-            pdf.drawString(100, 730, f"Name: {extracted_data['name']}")
-            pdf.drawString(100, 710, f"DOB: {extracted_data['dob']}")
-
-            # Add tables
-            y_position = 690
-            y_position = add_table_to_pdf(pdf, page_4_data, "1. Frequency appearance rate and average amplitude", y_position)
-            y_position = add_table_to_pdf(pdf, page_5_table_1, "2. The change in power of alpha waves", y_position)
-            y_position = add_table_to_pdf(pdf, page_5_table_2, "3. Changes in EEG during opening and closing", y_position)
-            y_position = add_table_to_pdf(pdf, page_6_data, "5. Physical tension and stress", y_position)
-            y_position = add_table_to_pdf(pdf, page_7_table_1, "6. Mental distraction and stress", y_position)
-            y_position = add_table_to_pdf(pdf, page_7_table_2, "7. Behavioral propensity (a/-B)", y_position)
-            y_position = add_table_to_pdf(pdf, page_8_table_1, "8. Emotional propensity (La- Ra)", y_position)
-            y_position = add_table_to_pdf(pdf, page_8_table_2, "9. Balance between left and right brain", y_position)
-            y_position = add_table_to_pdf(pdf, page_9_data, "10. Self-feedback ability", y_position)
-
-            # Ensure space for images
-            if y_position < 200:  # Move to a new page if necessary
-                pdf.showPage()
-                pdf.setFont("Helvetica", 12)
-                y_position = 750
-
-            # Add images with labels
-            if imagefrompage5:
-                pdf.drawString(100, y_position, "2. The change in power of alpha waves")
-                pdf.drawImage(imagefrompage5[1:], 100, y_position - 150, width=200, height=150)
-                y_position -= 170
-
-            if imagefrompage6:
-                if y_position < 200:  # Move to a new page if necessary
-                    pdf.showPage()
-                    pdf.setFont("Helvetica", 12)
-                    y_position = 750
-                pdf.drawString(100, y_position, "4. Brain arousal level (0/SMR)")
-                pdf.drawImage(imagefrompage6[1:], 100, y_position - 150, width=200, height=150)
-                y_position -= 170
-
-            if imagefrompage9:
-                if y_position < 200:  # Move to a new page if necessary
-                    pdf.showPage()
-                    pdf.setFont("Helvetica", 12)
-                    y_position = 750
-                pdf.drawString(100, y_position, "10. Self-feedback ability")
-                pdf.drawImage(imagefrompage9[1:], 100, y_position - 150, width=200, height=150)
-                y_position -= 170
-
-            # Save the PDF to a buffer
-            pdf.save()
-            pdf_buffer.seek(0)
-
-            # Add the generated PDF to the ZIP file
-            pdf_filename = os.path.basename(file_path).replace('.pdf', '_extracted.pdf')
-            zip_file.writestr(pdf_filename, pdf_buffer.getvalue())
-
-    zip_buffer.seek(0)  # Move to the start of the ZIP buffer
-
-    # Send the ZIP file as a response
-    return send_file(
-        zip_buffer,
-        mimetype='application/zip',
-        as_attachment=True,
-        download_name='extracted_pdfs.zip'
-    )
-   
-@app.route('/download_single_pdf', methods=['POST'])
-def download_single_pdf():
-    file_path = request.form.get("file_path")
-    if not file_path or not os.path.exists(file_path):
-        return "File not found", 404
-
+def generate_extracted_pdf(input_path, output_path):
     # Extract data and images for the specific file
-    extracted_data = extract_name_and_dob(file_path)
-    images = extract_images(file_path)
-    page_4_data = extract_data_from_page_4(file_path)
-    page_5_table_1, page_5_table_2 = extract_data_from_page_5(file_path)
-    page_6_data = extract_data_from_page_6(file_path)
-    page_7_table_1, page_7_table_2 = extract_data_from_page_7(file_path)
-    page_8_table_1, page_8_table_2 = extract_data_from_page_8(file_path)
-    page_9_data = extract_data_from_page_9(file_path)
+    extracted_data = extract_name_and_dob(input_path)
+    images = extract_images(input_path)
+    page_4_data = extract_data_from_page_4(input_path)
+    page_5_table_1, page_5_table_2 = extract_data_from_page_5(input_path)
+    page_6_data = extract_data_from_page_6(input_path)
+    page_7_table_1, page_7_table_2 = extract_data_from_page_7(input_path)
+    page_8_table_1, page_8_table_2 = extract_data_from_page_8(input_path)
+    page_9_data = extract_data_from_page_9(input_path)
 
     # Access individual images
     imagefrompage5 = images.get("imagefrompage5")
     imagefrompage6 = images.get("imagefrompage6")
     imagefrompage9 = images.get("imagefrompage9")
 
-    # Create an in-memory PDF buffer
-    pdf_buffer = io.BytesIO()
-    pdf = canvas.Canvas(pdf_buffer, pagesize=letter)
+    # Create PDF
+    pdf = canvas.Canvas(output_path, pagesize=letter)
     pdf.setFont("Helvetica", 12)
 
-    # Add extracted data to the PDF
-    pdf.drawString(100, 750, "Your Brain Health EEG Report")
-    pdf.drawString(100, 730, f"Name: {extracted_data['name']}")
-    pdf.drawString(100, 710, f"DOB: {extracted_data['dob']}")
+    # Helper functions
+    def draw_title(pdf, text, y_position):
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.drawCentredString(300, y_position, text)
+        return y_position - 30
 
-    # Add tables
-    y_position = 690
-    y_position = add_table_to_pdf(pdf, page_4_data, "1. Frequency appearance rate and average amplitude", y_position)
-    y_position = add_table_to_pdf(pdf, page_5_table_1, "2. The change in power of alpha waves", y_position)
-    y_position = add_table_to_pdf(pdf, page_5_table_2, "3. Changes in EEG during opening and closing", y_position)
-    y_position = add_table_to_pdf(pdf, page_6_data, "5. Physical tension and stress", y_position)
-    y_position = add_table_to_pdf(pdf, page_7_table_1, "6. Mental distraction and stress", y_position)
-    y_position = add_table_to_pdf(pdf, page_7_table_2, "7. Behavioral propensity (a/-B)", y_position)
-    y_position = add_table_to_pdf(pdf, page_8_table_1, "8. Emotional propensity (La- Ra)", y_position)
-    y_position = add_table_to_pdf(pdf, page_8_table_2, "9. Balance between left and right brain", y_position)
-    y_position = add_table_to_pdf(pdf, page_9_data, "10. Self-feedback ability", y_position)
+    def add_section_title(pdf, text, y_position):
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(75, y_position, text)
+        return y_position - 30
 
-    # Ensure space for images
-    if y_position < 200:  # Move to a new page if necessary
-        pdf.showPage()
-        pdf.setFont("Helvetica", 12)
-        y_position = 750
+    def add_divider(pdf, y_position):
+        """
+        Draws a divider line to separate sections.
+        """
+        pdf.setLineWidth(0.5)
+        pdf.setStrokeColor(colors.black)
+        pdf.line(50, y_position, 550, y_position)
+        return y_position - 20
 
-    # Add images with labels
-    if imagefrompage5:
-        pdf.drawString(100, y_position, "2. The change in power of alpha waves")
-        pdf.drawImage(imagefrompage5[1:], 100, y_position - 150, width=200, height=150)
-        y_position -= 170
+    def add_divider1(pdf, y_position):
+        """
+        Draws a divider line to separate sections.
+        """
+        pdf.setLineWidth(0.1)
+        pdf.setStrokeColor(colors.white)
+        pdf.line(50, y_position, 550, y_position)
+        return y_position - 20
+    
+    def add_table_with_style(pdf, data_frame, y_position):
+        if data_frame is None or data_frame.empty:
+            return y_position
 
-    if imagefrompage6:
-        if y_position < 200:  # Move to a new page if necessary
+        # Convert DataFrame to List for Table
+        table_data = data_frame.values.tolist()
+
+        # Create Table
+        table = Table(table_data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ]))
+
+        # Calculate table size
+        table_width, table_height = table.wrap(450, y_position)
+        if y_position - table_height < 50:  # Start a new page if the table doesn't fit
             pdf.showPage()
             pdf.setFont("Helvetica", 12)
             y_position = 750
-        pdf.drawString(100, y_position, "4. Brain arousal level (0/SMR)")
-        pdf.drawImage(imagefrompage6[1:], 100, y_position - 150, width=200, height=150)
-        y_position -= 170
 
-    if imagefrompage9:
-        if y_position < 200:  # Move to a new page if necessary
-            pdf.showPage()
-            pdf.setFont("Helvetica", 12)
-            y_position = 750
-        pdf.drawString(100, y_position, "10. Self-feedback ability")
-        pdf.drawImage(imagefrompage9[1:], 100, y_position - 150, width=200, height=150)
-        y_position -= 170
+        table.drawOn(pdf, 75, y_position - table_height)
+        return y_position - table_height - 30
 
-    # Save and return the PDF
+    def add_image_with_label(pdf, image_path, y_position):
+        if image_path:
+            if y_position < 250:  # Check for space
+                pdf.showPage()
+                pdf.setFont("Helvetica", 12)
+                y_position = 750
+            pdf.drawImage(image_path, 75, y_position - 150, width=300, height=150)
+            y_position -= 170
+        return y_position
+
+    # Start generating PDF content
+    y_position = 750
+    y_position = draw_title(pdf, "Brain Health EEG Report", y_position)
+    pdf.drawString(75, y_position, f"Name: {extracted_data['name']}")
+    y_position -= 20
+    pdf.drawString(75, y_position, f"DOB: {extracted_data['dob']}")
+    y_position = add_divider1(pdf, y_position)
+
+    # Add sections with tables and images
+    y_position = add_section_title(pdf, "1. Frequency Appearance Rate and Average Amplitude", y_position)
+    y_position = add_table_with_style(pdf, page_4_data, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "2. The Change in Power of Alpha Waves", y_position)
+    y_position = add_image_with_label(pdf, imagefrompage5[1:], y_position)
+    y_position = add_table_with_style(pdf, page_5_table_1, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "3. Changes in EEG During Opening and Closing", y_position)
+    y_position = add_table_with_style(pdf, page_5_table_2, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "5. Physical Tension and Stress", y_position)
+    y_position = add_table_with_style(pdf, page_6_data, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "6. Mental Distraction and Stress", y_position)
+    y_position = add_image_with_label(pdf, imagefrompage6[1:], y_position)
+    y_position = add_table_with_style(pdf, page_7_table_1, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "7. Behavioral Propensity (a/-B)", y_position)
+    y_position = add_table_with_style(pdf, page_7_table_2, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "8. Emotional Propensity (La- Ra)", y_position)
+    y_position = add_table_with_style(pdf, page_8_table_1, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "9. Balance Between Left and Right Brain", y_position)
+    y_position = add_table_with_style(pdf, page_8_table_2, y_position)
+    y_position = add_divider(pdf, y_position)
+
+    y_position = add_section_title(pdf, "10. Self-feedback Ability", y_position)
+    y_position = add_image_with_label(pdf, imagefrompage9[1:], y_position)
+    y_position = add_table_with_style(pdf, page_9_data, y_position)
+    y_position = add_divider(pdf, y_position)
+
     pdf.save()
-    pdf_buffer.seek(0)
-
-    # Send the generated PDF as a download
-    return send_file(
-        pdf_buffer,
-        mimetype='application/pdf',
-        as_attachment=True,
-        download_name=f"{os.path.basename(file_path).replace('.pdf', '_extracted.pdf')}"
-    )
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
