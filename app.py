@@ -487,12 +487,12 @@ def generate_extracted_pdf(input_path, output_path):
     def draw_title(pdf, text, y_position):
         pdf.setFont("Helvetica-Bold", 14)
         pdf.drawCentredString(300, y_position, text)
-        return y_position - 30
+        return y_position - 20
 
     def add_section_title(pdf, text, y_position):
         pdf.setFont("Helvetica-Bold", 12)
         pdf.drawString(75, y_position, text)
-        return y_position - 30
+        return y_position - 10
 
     def add_divider(pdf, y_position):
         """
@@ -501,7 +501,7 @@ def generate_extracted_pdf(input_path, output_path):
         pdf.setLineWidth(0.5)
         pdf.setStrokeColor(colors.black)
         pdf.line(50, y_position, 550, y_position)
-        return y_position - 20
+        return y_position - 15
 
     def add_divider1(pdf, y_position):
         """
@@ -522,11 +522,10 @@ def generate_extracted_pdf(input_path, output_path):
         # Create Table
         table = Table(table_data)
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ]))
 
         # Calculate table size
@@ -537,7 +536,7 @@ def generate_extracted_pdf(input_path, output_path):
             y_position = 750
 
         table.drawOn(pdf, 75, y_position - table_height)
-        return y_position - table_height - 30
+        return y_position - table_height - 18
 
     def add_image_with_label(pdf, image_path, y_position):
         if image_path:
@@ -548,6 +547,125 @@ def generate_extracted_pdf(input_path, output_path):
             pdf.drawImage(image_path, 75, y_position - 150, width=300, height=150)
             y_position -= 170
         return y_position
+
+    def add_image_with_table_right(pdf, image_path, data_frame, y_position, label=""):
+        """
+        Adds an image on the left and a table on the right side-by-side in the PDF.
+        :param pdf: The ReportLab canvas
+        :param image_path: Path to the image to insert
+        :param data_frame: Pandas DataFrame to render as a table
+        :param y_position: Current Y-position on the PDF
+        :param label: Optional label for the image
+        :return: Updated Y-position after rendering the image and table
+        """
+        if y_position < 200:  # Start a new page if space is insufficient
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y_position = 750
+
+        # Draw the label (if provided)
+        if label:
+            pdf.setFont("Helvetica-Bold", 12)
+            pdf.drawString(100, y_position, label)
+            y_position -= 20
+
+        # Draw the image on the left
+        img_width, img_height = 200, 150
+        pdf.drawImage(image_path, 100, y_position - img_height, width=img_width, height=img_height)
+
+        # Convert DataFrame to list of lists for ReportLab (exclude headers)
+        table_data = data_frame.values.tolist()
+
+        # Create the table
+        table = Table(table_data, colWidths=[100, 100])
+        table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+
+        # Calculate table height
+        table_width, table_height = table.wrap(200, y_position)
+        table_x = 350  # Position table to the right of the image
+
+        # Ensure space for both image and table
+        if y_position - max(img_height, table_height) < 50:
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y_position = 750
+            pdf.drawImage(image_path, 100, y_position - img_height, width=img_width, height=img_height)
+            table_x = 350
+            y_position -= img_height
+
+        # Draw the table
+        table.drawOn(pdf, table_x, y_position - table_height)
+
+        # Adjust y_position based on the larger of image/table height
+        y_position -= max(img_height, table_height) + 20
+
+        return y_position
+
+    def add_page_5_table_2_with_layout(pdf, data_frame, y_position):
+        """
+        Adds the modified `page_5_table_2` table with additional layout changes.
+        :param pdf: The ReportLab canvas
+        :param data_frame: Pandas DataFrame to render as a table
+        :param y_position: Current Y-position on the PDF
+        :return: Updated Y-position after rendering the table
+        """
+        # Add a title for the section
+        y_position = add_section_title(pdf, "3. Changes in EEG During Opening and Closing", y_position)
+
+        # Ensure enough space for the table
+        if y_position < 150:  # Start a new page if space is insufficient
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y_position = 750
+
+        # Modify the table layout
+        new_columns = [["OE1/CE.", "Left"], ["OE1/CE", "Right"], ["OE2/CE", "Left"], ["OE2/CE", "Right"], ["OE2/CE", "Right"]]
+        top_row = ["Div.", "Side", "δ", "θ", "α", "SMR", "-β", "+β"]
+
+        # Convert DataFrame to list of lists
+        table_data = data_frame.values.tolist()
+
+        # Insert new columns into table rows
+        modified_table = []
+        for i, row in enumerate(table_data):
+            new_column_values = new_columns[i] if i < len(new_columns) else ["", ""]
+            modified_table.append(new_column_values + row)
+
+        # Add the new top row
+        modified_table.insert(0, top_row)
+
+        # Create the table
+        table = Table(modified_table)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),  # Header row
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ]))
+
+        # Calculate table height
+        table_width, table_height = table.wrap(500, y_position)
+        if y_position - table_height < 100:  # Start a new page if the table doesn't fit
+            pdf.showPage()
+            pdf.setFont("Helvetica", 12)
+            y_position = 750
+
+        # Draw the table on the PDF
+        table.drawOn(pdf, 100, y_position - table_height)
+        y_position -= table_height + 20
+
+        # Add a divider after the table
+        y_position = add_divider(pdf, y_position)
+
+        return y_position
+
+    
 
     # Start generating PDF content
     y_position = 750
@@ -564,11 +682,13 @@ def generate_extracted_pdf(input_path, output_path):
 
     y_position = add_section_title(pdf, "2. The Change in Power of Alpha Waves", y_position)
     y_position = add_image_with_label(pdf, imagefrompage5[1:], y_position)
-    y_position = add_table_with_style(pdf, page_5_table_1, y_position)
+    # y_position = add_table_with_style(pdf, page_5_table_1, y_position)
     y_position = add_divider(pdf, y_position)
 
-    y_position = add_section_title(pdf, "3. Changes in EEG During Opening and Closing", y_position)
-    y_position = add_table_with_style(pdf, page_5_table_2, y_position)
+    y_position = add_page_5_table_2_with_layout(pdf, page_5_table_2, y_position)
+
+    y_position = add_section_title(pdf, "4. Brain arousal level (0/SMR)", y_position)
+    y_position = add_image_with_label(pdf, imagefrompage6[1:], y_position)
     y_position = add_divider(pdf, y_position)
 
     y_position = add_section_title(pdf, "5. Physical Tension and Stress", y_position)
@@ -576,7 +696,6 @@ def generate_extracted_pdf(input_path, output_path):
     y_position = add_divider(pdf, y_position)
 
     y_position = add_section_title(pdf, "6. Mental Distraction and Stress", y_position)
-    y_position = add_image_with_label(pdf, imagefrompage6[1:], y_position)
     y_position = add_table_with_style(pdf, page_7_table_1, y_position)
     y_position = add_divider(pdf, y_position)
 
@@ -593,13 +712,12 @@ def generate_extracted_pdf(input_path, output_path):
     y_position = add_divider(pdf, y_position)
 
     y_position = add_section_title(pdf, "10. Self-feedback Ability", y_position)
-    y_position = add_image_with_label(pdf, imagefrompage9[1:], y_position)
-    y_position = add_table_with_style(pdf, page_9_data, y_position)
-    y_position = add_divider(pdf, y_position)
+    y_position = add_image_with_table_right(pdf, imagefrompage9[1:], page_9_data, y_position)
+
 
     pdf.save()
 
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     app.run(host='0.0.0.0', port=port)
